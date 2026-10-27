@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Sync</string>
+    <string name="notification_channel_name">Music Playback</string>
+    <string name="notification_channel_description">Active audio playback notification and media controls</string>
+</resources>
