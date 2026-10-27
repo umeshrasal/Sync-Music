@@ -53,7 +53,7 @@ class OfflineDownloadManager @Inject constructor(
     }
 
     // Static master key derivation for local storage (AES-256)
-    private val masterKey: SecretKey by lazy {
+    private val encryptionKey: SecretKey by lazy {
         val prefs = context.getSharedPreferences("sync_vault_security", Context.MODE_PRIVATE)
         val storedKey = prefs.getString("vault_key_b64", null)
         if (storedKey != null) {
@@ -102,7 +102,7 @@ class OfflineDownloadManager @Inject constructor(
             val iv = ByteArray(12) // 96-bit IV for GCM
             SecureRandom().nextBytes(iv)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, masterKey, GCMParameterSpec(128, iv))
+            cipher.init(Cipher.ENCRYPT_MODE, encryptionKey, GCMParameterSpec(128, iv))
 
             val encryptedFile = File(vaultDir, "${track.id}.sync")
             val outputStream = FileOutputStream(encryptedFile)
@@ -161,7 +161,7 @@ class OfflineDownloadManager @Inject constructor(
     /**
      * Returns the master AES key for decrypting offline streams during playback.
      */
-    fun getMasterKey(): SecretKey = masterKey
+    fun getMasterKey(): SecretKey = encryptionKey
 
     /**
      * Removes an offline track from disk and database.
