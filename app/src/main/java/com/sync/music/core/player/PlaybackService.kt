@@ -217,15 +217,6 @@ class PlaybackService : MediaSessionService() {
             .setSessionActivity(sessionActivityIntent)
             .setCallback(SyncMediaSessionCallback())
             .build()
-
-        // 6. Setup Media Notification Provider with High-Res artwork
-        setMediaNotificationProvider(
-            DefaultMediaNotificationProvider.Builder(this)
-                .setChannelId(NOTIFICATION_CHANNEL_ID)
-                .setChannelName(R.string.notification_channel_name)
-                .setNotificationId(NOTIFICATION_ID)
-                .build()
-        )
     }
 
     private fun createNotificationChannel() {

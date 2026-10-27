@@ -49,7 +49,6 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -149,12 +148,6 @@ fun FullPlayerSheet(
             selectedTabIndex = pagerState.currentPage,
             containerColor = Color.Transparent,
             contentColor = Color.White,
-            indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[pagerState.currentPage]),
-                    color = Color.White
-                )
-            },
             divider = {}
         ) {
             tabTitles.forEachIndexed { index, title ->
