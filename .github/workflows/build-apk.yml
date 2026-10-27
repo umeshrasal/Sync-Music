@@ -34,21 +34,12 @@ jobs:
           set -o pipefail
           ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
 
-      - name: Dump Log on Failure
+      - name: Annotate Failure
         if: failure()
         run: |
-          echo "### Build Failure Log" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -C 3 -E "(e: |error:|FAILED|Exception|Caused by:)" build.log | tail -n 100 >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Find and Report APK Paths
-        if: success()
-        run: |
-          echo "### Generated APKs" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          find . -name "*.apk" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E -C 2 "(e: |error:|FAILED|Exception|Caused by:)" build.log | tail -n 50 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
 
       - name: Upload Debug APK
         if: success()
