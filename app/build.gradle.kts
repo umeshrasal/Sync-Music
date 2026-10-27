@@ -103,6 +103,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
     implementation(libs.coil.compose)
+    implementation("com.google.guava:guava:33.3.1-android")
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.core)
