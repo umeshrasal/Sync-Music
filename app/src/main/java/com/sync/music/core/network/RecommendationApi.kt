@@ -19,7 +19,7 @@ class RecommendationApi @Inject constructor(
     private val okHttpClient: OkHttpClient
 ) {
     companion object {
-        private const val INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqAE4An4q7CH7Il3ndWZ_g64e"
+        private const val INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
         private const val NEXT_ENDPOINT = "https://music.youtube.com/youtubei/v1/next?key=$INNERTUBE_API_KEY"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }

@@ -27,7 +27,7 @@ class StreamResolver @Inject constructor(
     private val okHttpClient: OkHttpClient
 ) {
     companion object {
-        private const val INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqAE4An4q7CH7Il3ndWZ_g64e"
+        private const val INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
         private const val PLAYER_ENDPOINT = "https://music.youtube.com/youtubei/v1/player?key=$INNERTUBE_API_KEY"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
@@ -37,13 +37,37 @@ class StreamResolver @Inject constructor(
             250, // Opus 70kbps
             249  // Opus 50kbps
         )
+
+        private val FALLBACK_MIRRORS = listOf(
+            "https://yt.chocolatemoo53.com",
+            "https://inv.nadeko.net",
+            "https://invidious.nerdvpn.de"
+        )
     }
 
     /**
-     * Resolves the optimal direct audio stream from the Innertube player endpoint.
+     * Resolves the optimal direct audio stream, with Innertube primary and resilient fallback mirrors.
      */
     suspend fun resolveStream(videoId: String): Result<StreamResolution> = withContext(Dispatchers.IO) {
-        try {
+        // Attempt 1: Direct Innertube Player API
+        val directResult = tryResolveDirectInnertube(videoId)
+        if (directResult.isSuccess) {
+            return@withContext directResult
+        }
+
+        // Attempt 2: Resilient Stream Mirror Resolver
+        for (mirror in FALLBACK_MIRRORS) {
+            val fallbackResult = tryResolveFromMirror(mirror, videoId)
+            if (fallbackResult.isSuccess) {
+                return@withContext fallbackResult
+            }
+        }
+
+        Result.failure(directResult.exceptionOrNull() ?: Exception("Unable to resolve audio stream for $videoId"))
+    }
+
+    private fun tryResolveDirectInnertube(videoId: String): Result<StreamResolution> {
+        return try {
             val payload = JSONObject().apply {
                 put("videoId", videoId)
                 put("context", JSONObject().apply {
@@ -53,11 +77,6 @@ class StreamResolver @Inject constructor(
                         put("androidSdkVersion", 34)
                         put("hl", "en")
                         put("gl", "US")
-                    })
-                })
-                put("playbackContext", JSONObject().apply {
-                    put("contentPlaybackContext", JSONObject().apply {
-                        put("signatureTimestamp", 19800)
                     })
                 })
             }
@@ -73,67 +92,111 @@ class StreamResolver @Inject constructor(
 
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
-                return@withContext Result.failure(Exception("Stream resolution HTTP error: ${response.code}"))
+                return Result.failure(Exception("HTTP ${response.code}"))
             }
 
-            val responseBody = response.body?.string() ?: return@withContext Result.failure(Exception("Empty player response"))
+            val responseBody = response.body?.string() ?: return Result.failure(Exception("Empty player response"))
             val json = JSONObject(responseBody)
 
             val playabilityStatus = json.optJSONObject("playabilityStatus")
             val status = playabilityStatus?.optString("status")
             if (status != "OK") {
-                val reason = playabilityStatus?.optString("reason", "Track unplayable")
-                return@withContext Result.failure(Exception("Track unplayable: $reason"))
+                return Result.failure(Exception("Innertube status: $status"))
             }
 
-            // Loudness DB extraction for ReplayGain normalization
             val playerConfig = json.optJSONObject("playerConfig")
-            val audioConfig = playerConfig?.optJSONObject("audioConfig")
-            val loudnessDb = audioConfig?.optDouble("loudnessDb")?.toFloat()
+            val loudnessDb = playerConfig?.optJSONObject("audioConfig")?.optDouble("loudnessDb")?.toFloat()
 
-            // Streaming data extraction
-            val streamingData = json.optJSONObject("streamingData") ?: return@withContext Result.failure(Exception("No streaming data"))
-            val adaptiveFormats = streamingData.optJSONArray("adaptiveFormats") ?: return@withContext Result.failure(Exception("No adaptive formats"))
+            val streamingData = json.optJSONObject("streamingData") ?: return Result.failure(Exception("No streaming data"))
+            val adaptiveFormats = streamingData.optJSONArray("adaptiveFormats") ?: return Result.failure(Exception("No adaptive formats"))
 
-            var selectedUrl: String? = null
-            var selectedItag: Int = 0
-            var selectedMimeType: String = "audio/webm"
-            var selectedBitrate: Int = 0
+            extractBestAudioFormat(adaptiveFormats, loudnessDb)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
-            // Iterate according to priority itags
+    private fun tryResolveFromMirror(mirrorUrl: String, videoId: String): Result<StreamResolution> {
+        return try {
+            val url = "$mirrorUrl/api/v1/videos/$videoId"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "SyncMusicAndroid/1.0.0")
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                return Result.failure(Exception("Mirror $mirrorUrl HTTP ${response.code}"))
+            }
+
+            val body = response.body?.string() ?: return Result.failure(Exception("Empty mirror body"))
+            val json = JSONObject(body)
+
+            val adaptiveFormats = json.optJSONArray("adaptiveFormats") ?: return Result.failure(Exception("No adaptive formats on mirror"))
+
             for (preferredItag in PREFERRED_ITAGS) {
                 for (i in 0 until adaptiveFormats.length()) {
                     val format = adaptiveFormats.getJSONObject(i)
                     val itag = format.optInt("itag")
-                    val mimeType = format.optString("mimeType")
+                    val type = format.optString("type")
+                    val streamUrl = format.optString("url")
 
-                    if (itag == preferredItag && mimeType.startsWith("audio/")) {
-                        var url = format.optString("url")
-                        if (url.isEmpty() && format.has("cipher")) {
-                            url = parseCipher(format.getString("cipher"))
-                        } else if (url.isEmpty() && format.has("signatureCipher")) {
-                            url = parseCipher(format.getString("signatureCipher"))
-                        }
-
-                        if (url.isNotEmpty()) {
-                            selectedUrl = url
-                            selectedItag = itag
-                            selectedMimeType = mimeType
-                            selectedBitrate = format.optInt("bitrate", 160000)
-                            break
-                        }
+                    if (itag == preferredItag && type.startsWith("audio/") && streamUrl.isNotEmpty()) {
+                        val bitrate = format.optInt("bitrate", 160000)
+                        val expiresAt = parseExpiryFromUrl(streamUrl)
+                        return Result.success(
+                            StreamResolution(
+                                streamUrl = streamUrl,
+                                itag = itag,
+                                mimeType = type.substringBefore(";"),
+                                bitrate = bitrate,
+                                loudnessDb = null,
+                                expiresAtEpochMs = expiresAt
+                            )
+                        )
                     }
                 }
-                if (selectedUrl != null) break
             }
 
-            if (selectedUrl == null) {
-                return@withContext Result.failure(Exception("No suitable audio streams found"))
+            Result.failure(Exception("No preferred audio itags found on mirror"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun extractBestAudioFormat(adaptiveFormats: org.json.JSONArray, loudnessDb: Float?): Result<StreamResolution> {
+        var selectedUrl: String? = null
+        var selectedItag = 0
+        var selectedMimeType = "audio/webm"
+        var selectedBitrate = 0
+
+        for (preferredItag in PREFERRED_ITAGS) {
+            for (i in 0 until adaptiveFormats.length()) {
+                val format = adaptiveFormats.getJSONObject(i)
+                val itag = format.optInt("itag")
+                val mimeType = format.optString("mimeType")
+
+                if (itag == preferredItag && mimeType.startsWith("audio/")) {
+                    var url = format.optString("url")
+                    if (url.isEmpty() && format.has("cipher")) {
+                        url = parseCipher(format.getString("cipher"))
+                    } else if (url.isEmpty() && format.has("signatureCipher")) {
+                        url = parseCipher(format.getString("signatureCipher"))
+                    }
+
+                    if (url.isNotEmpty()) {
+                        selectedUrl = url
+                        selectedItag = itag
+                        selectedMimeType = mimeType.substringBefore(";")
+                        selectedBitrate = format.optInt("bitrate", 160000)
+                        break
+                    }
+                }
             }
+            if (selectedUrl != null) break
+        }
 
-            // Parse URL expiration parameter ("expire")
-            val expiresAtEpochMs = parseExpiryFromUrl(selectedUrl)
-
+        return if (selectedUrl != null) {
             Result.success(
                 StreamResolution(
                     streamUrl = selectedUrl,
@@ -141,11 +204,11 @@ class StreamResolver @Inject constructor(
                     mimeType = selectedMimeType,
                     bitrate = selectedBitrate,
                     loudnessDb = loudnessDb,
-                    expiresAtEpochMs = expiresAtEpochMs
+                    expiresAtEpochMs = parseExpiryFromUrl(selectedUrl)
                 )
             )
-        } catch (e: Exception) {
-            Result.failure(e)
+        } else {
+            Result.failure(Exception("No suitable audio streams found"))
         }
     }
 
@@ -166,9 +229,9 @@ class StreamResolver @Inject constructor(
             if (expireParam != null) {
                 expireParam.toLong() * 1000L
             } else {
-                System.currentTimeMillis() + 6 * 3600 * 1000L // 6 hour fallback
+                System.currentTimeMillis() + 6 * 3600 * 1000L
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             System.currentTimeMillis() + 6 * 3600 * 1000L
         }
     }
